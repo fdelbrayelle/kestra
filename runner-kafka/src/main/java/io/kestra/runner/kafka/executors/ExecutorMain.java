@@ -5,23 +5,20 @@ import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.ExecutionKilled;
 import io.kestra.core.models.executions.LogEntry;
 import io.kestra.core.models.executions.TaskRun;
-import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.State;
-import io.kestra.core.models.templates.Template;
 import io.kestra.core.queues.QueueService;
 import io.kestra.core.runners.*;
 import io.kestra.core.services.ConditionService;
 import io.kestra.core.services.FlowService;
 import io.kestra.runner.kafka.KafkaFlowExecutor;
 import io.kestra.runner.kafka.KafkaQueueEnabled;
-import io.kestra.runner.kafka.KafkaTemplateExecutor;
 import io.kestra.runner.kafka.serializers.JsonSerde;
 import io.kestra.runner.kafka.services.KafkaAdminService;
-import io.kestra.runner.kafka.services.KafkaStreamService;
 import io.kestra.runner.kafka.services.KafkaStreamSourceService;
 import io.kestra.runner.kafka.services.KafkaStreamsBuilder;
 import io.kestra.runner.kafka.streams.*;
-import io.micronaut.context.ApplicationContext;
+import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -29,18 +26,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.*;
+import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.KeyValueStore;
-import org.apache.kafka.streams.state.QueryableStoreTypes;
 import org.apache.kafka.streams.state.Stores;
 import org.slf4j.event.Level;
 
 import java.util.HashMap;
 import java.util.Map;
-
-import jakarta.inject.Inject;
-import jakarta.inject.Singleton;
 
 @KafkaQueueEnabled
 @Singleton
@@ -224,6 +218,8 @@ public class ExecutorMain implements KafkaExecutorInterface {
             .transformValues(
                 () -> new ExecutorJoinerTransformer(
                     EXECUTOR_STATE_STORE_NAME,
+                    this.executorService,
+                    this.kafkaStreamSourceService,
                     this.metricRegistry
                 ),
                 Named.as("JoinWorkerResult.transformValues"),
@@ -422,7 +418,7 @@ public class ExecutorMain implements KafkaExecutorInterface {
 
         // not flowable > to WorkerTask
         KStream<String, WorkerTask> resultNotFlowable = dedupWorkerTask
-            .filter((key, value) -> !value.getTask().isFlowable(), Named.as("HandleWorkerTaskNotFlowable.filterIsNotFlowable"))
+            .filter((key, value) -> value.getTask().isSendToWorkerTask(), Named.as("HandleWorkerTaskNotFlowable.filterIsNotFlowable"))
             .map((key, value) -> new KeyValue<>(queueService.key(value), value), Named.as("HandleWorkerTaskNotFlowable.mapWithKey"))
             .selectKey(
                 (key, value) -> queueService.key(value),
